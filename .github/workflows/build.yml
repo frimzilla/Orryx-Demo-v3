@@ -2,8 +2,7 @@ name: EAS Build and QR Deploy
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -23,20 +22,31 @@ jobs:
         run: |
           node -e "const fs=require('fs');const s=fs.readFileSync('package.json','utf8');try{JSON.parse(s);console.log('package.json OK ✅')}catch(e){const m=String(e.message);const pos=(m.match(/position (\\d+)/)||[])[1];if(pos){const i=+pos;const start=Math.max(0,i-60);const end=Math.min(s.length,i+60);console.error('\\nJSON parse error at position',i);console.error('--- context ---\\n'+s.slice(start,end)+'\\n---------------');}throw e;}"
 
-      - name: 📦 Install dependencies
-        run: npm ci --loglevel=verbose
-        run: npm install
+      - name: 📦 Install dependencies (verbose)
+        run: npm install --loglevel=verbose
 
       - name: ⚙️ Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: 🛠 Run EAS Build (Android Internal QR)
+      - name: 🛠 Run EAS Build (Android Internal QR, JSON out)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        # tee lets us keep console logs while also saving JSON to a file
         run: |
           eas --version
-          eas build -p android --profile internal --non-interactive
+          eas build -p android --profile internal --non-interactive --json | tee eas-build.json
 
-      - name: ✅ Show QR Code in Logs
+      - name: 🔗 Extract EAS build URL and prepare artifact
         run: |
-          echo "✅ If successful, your QR will appear in the EAS dashboard."
+          node -e "const fs=require('fs');let url='';try{const j=JSON.parse(fs.readFileSync('eas-build.json','utf8'));const b=Array.isArray(j.builds)? j.builds[0]: j; url=b?.webUrl||b?.buildUrl||b?.logsUrl||'';}catch(e){console.error('Could not parse eas-build.json:', e.message);}console.log('EAS build page:', url||'(not found)');fs.writeFileSync('eas-build-url.txt', (url||'').trim());fs.writeFileSync('README.txt', (url?`Open this URL for the QR code:\n${url}\n`:'Build failed or URL not found.\n'));"
+
+      - name: 📤 Upload QR link artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eas-android-internal-build
+          path: |
+            eas-build.json
+            eas-build-url.txt
+            README.txt
+
