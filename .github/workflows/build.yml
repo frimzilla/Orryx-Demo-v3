@@ -1,0 +1,37 @@
+name: EAS Build and QR Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧠 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧩 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: ⚙️ Install EAS CLI
+        run: npm install -g eas-cli
+
+      - name: 🛠 Run EAS Build (Android Internal QR)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas --version
+          eas build -p android --profile internal --non-interactive
+
+      - name: ✅ Show QR Code in Logs
+        run: |
+          echo "✅ If successful, your QR will appear in the EAS dashboard."
