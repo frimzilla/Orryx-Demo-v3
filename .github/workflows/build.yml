@@ -10,79 +10,80 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧠 Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 🧩 Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: 🔎 Validate package.json (show error context)
+      - name: Validate package.json
         run: |
-          node -e "const fs=require('fs');const s=fs.readFileSync('package.json','utf8');try{JSON.parse(s);console.log('package.json OK ✅')}catch(e){const m=String(e.message);const pos=(m.match(/position (\\d+)/)||[])[1];if(pos){const i=+pos;const start=Math.max(0,i-60);const end=Math.min(s.length,i+60);console.error('\\nJSON parse error at position',i);console.error('--- context ---\\n'+s.slice(start,end)+'\\n---------------');}throw e;}"
+          node -e "const fs=require('fs');try{JSON.parse(fs.readFileSync('package.json','utf8'));console.log('package.json OK ✅')}catch(e){console.error('❌ Invalid package.json:',e.message);process.exit(1)}"
 
-      - name: 📦 Install dependencies (verbose)
-        run: npm install --loglevel=verbose
+      - name: Install dependencies
+        run: npm install --silent
 
-      - name: ⚙️ Install EAS CLI
+      - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: 🛠 Run EAS Build (Android Internal QR, JSON out)
+      - name: Verify EXPO_TOKEN secret
+        run: |
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "::error ::❌ EXPO_TOKEN secret is missing. Add it under Settings → Secrets → Actions."
+            exit 1
+          else
+            echo "✅ EXPO_TOKEN detected. Proceeding with build."
+          fi
+
+      - name: Run EAS Build (Android, profile=internal)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           eas --version
           eas build -p android --profile internal --non-interactive --json | tee eas-build.json
 
-      - name: 🔗 Extract EAS build URL (safe heredoc)
+      - name: Extract EAS build URL
         run: |
           node <<'NODE'
           const fs = require('fs');
           let url = '';
           try {
-            const txt = fs.readFileSync('eas-build.json','utf8');
+            const txt = fs.readFileSync('eas-build.json','utf8').trim();
+            if (!txt) throw new Error('empty eas-build.json (build likely failed earlier)');
             const j = JSON.parse(txt);
             const b = Array.isArray(j.builds) ? j.builds[0] : j;
             url = (b && (b.webUrl || b.buildUrl || b.logsUrl)) || '';
           } catch (e) {
-            console.error('Could not parse eas-build.json:', e.message);
+            console.error('❌ Parse error:', e.message);
           }
           console.log('EAS build page:', url || '(not found)');
           fs.writeFileSync('eas-build-url.txt', (url || '').trim());
-          fs.writeFileSync(
-            'README.txt',
-            url ? `Open this URL for the QR code:\n${url}\n` : 'Build failed or URL not found.\n'
-          );
-          fs.writeFileSync('eas-url.json', JSON.stringify({ url }, null, 2));
+          fs.writeFileSync('README.txt', url ? `Open this URL for the QR code:\n${url}\n` : 'Build failed or URL not found.\n');
           NODE
 
-      - name: 📥 Install QR tool globally
+      - name: Install QR tool
         run: npm install -g qrcode-terminal
 
-      - name: 🧾 Print QR in logs
-        if: success() || failure()
+      - name: Print QR in logs
+        if: always()
         run: |
           if [ -s eas-build-url.txt ]; then
             URL="$(cat eas-build-url.txt)"
             echo "🔗 $URL"
-            # Try global first; if missing, fall back to npx
-            if command -v qrcode-terminal >/dev/null 2>&1; then
-              qrcode-terminal "$URL"
-            else
-              npx --yes qrcode-terminal "$URL"
-            fi
+            qrcode-terminal "$URL"
           else
-            echo "No EAS URL found; skipping QR."
+            echo "⚠️ No EAS URL found; skipping QR."
+            echo "Tip: Check the 'eas-build.json' artifact for error details."
           fi
 
-      - name: 📤 Upload build artifacts (URL, QR hint, raw JSON)
+      - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eas-android-internal-build
           path: |
             eas-build.json
-            eas-url.json
             eas-build-url.txt
             README.txt
