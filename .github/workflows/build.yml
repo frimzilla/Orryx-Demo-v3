@@ -19,6 +19,10 @@ jobs:
         with:
           node-version: 20
 
+      - name: 🔎 Validate package.json (show error context)
+        run: |
+          node -e "const fs=require('fs');const s=fs.readFileSync('package.json','utf8');try{JSON.parse(s);console.log('package.json OK ✅')}catch(e){const m=String(e.message);const pos=(m.match(/position (\\d+)/)||[])[1];if(pos){const i=+pos;const start=Math.max(0,i-60);const end=Math.min(s.length,i+60);console.error('\\nJSON parse error at position',i);console.error('--- context ---\\n'+s.slice(start,end)+'\\n---------------');}throw e;}"
+
       - name: 📦 Install dependencies
         run: npm install
 
