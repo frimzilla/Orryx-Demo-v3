@@ -31,22 +31,58 @@ jobs:
       - name: 🛠 Run EAS Build (Android Internal QR, JSON out)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        # tee lets us keep console logs while also saving JSON to a file
         run: |
           eas --version
           eas build -p android --profile internal --non-interactive --json | tee eas-build.json
 
-      - name: 🔗 Extract EAS build URL and prepare artifact
+      - name: 🔗 Extract EAS build URL (safe heredoc)
         run: |
-          node -e "const fs=require('fs');let url='';try{const j=JSON.parse(fs.readFileSync('eas-build.json','utf8'));const b=Array.isArray(j.builds)? j.builds[0]: j; url=b?.webUrl||b?.buildUrl||b?.logsUrl||'';}catch(e){console.error('Could not parse eas-build.json:', e.message);}console.log('EAS build page:', url||'(not found)');fs.writeFileSync('eas-build-url.txt', (url||'').trim());fs.writeFileSync('README.txt', (url?`Open this URL for the QR code:\n${url}\n`:'Build failed or URL not found.\n'));"
+          node <<'NODE'
+          const fs = require('fs');
+          let url = '';
+          try {
+            const txt = fs.readFileSync('eas-build.json','utf8');
+            const j = JSON.parse(txt);
+            const b = Array.isArray(j.builds) ? j.builds[0] : j;
+            url = (b && (b.webUrl || b.buildUrl || b.logsUrl)) || '';
+          } catch (e) {
+            console.error('Could not parse eas-build.json:', e.message);
+          }
+          console.log('EAS build page:', url || '(not found)');
+          fs.writeFileSync('eas-build-url.txt', (url || '').trim());
+          fs.writeFileSync(
+            'README.txt',
+            url ? `Open this URL for the QR code:\n${url}\n` : 'Build failed or URL not found.\n'
+          );
+          fs.writeFileSync('eas-url.json', JSON.stringify({ url }, null, 2));
+          NODE
 
-      - name: 📤 Upload QR link artifact
+      - name: 📥 Install QR tool globally
+        run: npm install -g qrcode-terminal
+
+      - name: 🧾 Print QR in logs
+        if: success() || failure()
+        run: |
+          if [ -s eas-build-url.txt ]; then
+            URL="$(cat eas-build-url.txt)"
+            echo "🔗 $URL"
+            # Try global first; if missing, fall back to npx
+            if command -v qrcode-terminal >/dev/null 2>&1; then
+              qrcode-terminal "$URL"
+            else
+              npx --yes qrcode-terminal "$URL"
+            fi
+          else
+            echo "No EAS URL found; skipping QR."
+          fi
+
+      - name: 📤 Upload build artifacts (URL, QR hint, raw JSON)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eas-android-internal-build
           path: |
             eas-build.json
+            eas-url.json
             eas-build-url.txt
             README.txt
-
