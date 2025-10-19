@@ -22,8 +22,31 @@ jobs:
         run: |
           node -e "const fs=require('fs');try{JSON.parse(fs.readFileSync('package.json','utf8'));console.log('package.json OK ✅')}catch(e){console.error('❌ Invalid package.json:',e.message);process.exit(1)}"
 
-      - name: Install dependencies
-        run: npm install --silent
+      # 🔄 QUIET install with an on-screen spinner/loading bar
+      - name: Install dependencies (with loading bar)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # spinner frames
+          frames=( "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏" )
+          i=0
+          tput civis || true
+          printf "Installing dependencies "
+          ( npm install --silent --no-audit --no-fund ) & pid=$!
+          while kill -0 $pid >/dev/null 2>&1; do
+            printf "\rInstalling dependencies %s" "${frames[$((i%${#frames[@]}))]}"
+            i=$((i+1))
+            sleep 0.1
+          done
+          wait $pid
+          code=$?
+          if [ $code -eq 0 ]; then
+            printf "\rInstalling dependencies ✅\n"
+          else
+            printf "\rInstalling dependencies ❌\n"
+          fi
+          tput cnorm || true
+          exit $code
 
       - name: Install EAS CLI
         run: npm install -g eas-cli
@@ -42,26 +65,64 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           eas --version
+          # Emit JSON we can parse for the URL
           eas build -p android --profile internal --non-interactive --json | tee eas-build.json
 
-      - name: Extract EAS build URL
+      # Parse URL; also emit status/error details if present
+      - name: Extract EAS build URL (primary)
         run: |
           node <<'NODE'
           const fs = require('fs');
+          function safeRead(p){ try{ return fs.readFileSync(p,'utf8'); }catch{ return ''; } }
           let url = '';
-          try {
-            const txt = fs.readFileSync('eas-build.json','utf8').trim();
-            if (!txt) throw new Error('empty eas-build.json (build likely failed earlier)');
-            const j = JSON.parse(txt);
-            const b = Array.isArray(j.builds) ? j.builds[0] : j;
-            url = (b && (b.webUrl || b.buildUrl || b.logsUrl)) || '';
-          } catch (e) {
-            console.error('❌ Parse error:', e.message);
+          let status = '';
+          let err = '';
+          const txt = safeRead('eas-build.json').trim();
+          if (txt) {
+            try {
+              const j = JSON.parse(txt);
+              const b = Array.isArray(j.builds) ? j.builds[0] : j;
+              status = b?.status || j?.status || '';
+              url = b?.webUrl || b?.buildUrl || b?.logsUrl || '';
+              err = b?.error?.message || j?.error?.message || '';
+            } catch (e) {
+              console.error('❌ Parse error:', e.message);
+            }
           }
+          if (status && status !== 'finished') console.log('EAS status:', status);
+          if (!url && err) console.log('EAS error:', err);
           console.log('EAS build page:', url || '(not found)');
           fs.writeFileSync('eas-build-url.txt', (url || '').trim());
           fs.writeFileSync('README.txt', url ? `Open this URL for the QR code:\n${url}\n` : 'Build failed or URL not found.\n');
           NODE
+
+      # If URL missing, try to recover from latest finished build list
+      - name: Recover URL from latest finished build (fallback)
+        if: always()
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ ! -s eas-build-url.txt ]; then
+            echo "No URL from primary JSON; trying eas build:list fallback…"
+            eas build:list --platform android --status finished --limit 1 --json > eas-fallback.json || true
+            node <<'NODE'
+            const fs = require('fs');
+            try {
+              const j = JSON.parse(fs.readFileSync('eas-fallback.json','utf8'));
+              const b = Array.isArray(j) ? j[0] : j;
+              const url = (b && (b.webUrl || b.buildUrl || b.logsUrl)) || '';
+              if (url) {
+                console.log('Recovered EAS build page:', url);
+                fs.writeFileSync('eas-build-url.txt', url);
+                fs.writeFileSync('README.txt', `Open this URL for the QR code:\n${url}\n`);
+              } else {
+                console.log('No finished builds found in fallback.');
+              }
+            } catch (e) {
+              console.log('Fallback parse error:', e.message);
+            }
+            NODE
+          fi
 
       - name: Install QR tool
         run: npm install -g qrcode-terminal
@@ -75,7 +136,7 @@ jobs:
             qrcode-terminal "$URL"
           else
             echo "⚠️ No EAS URL found; skipping QR."
-            echo "Tip: Check the 'eas-build.json' artifact for error details."
+            echo "Tip: Check 'eas-build.json' and (if present) 'eas-fallback.json' artifacts."
           fi
 
       - name: Upload build artifacts
@@ -85,5 +146,6 @@ jobs:
           name: eas-android-internal-build
           path: |
             eas-build.json
+            eas-fallback.json
             eas-build-url.txt
             README.txt
