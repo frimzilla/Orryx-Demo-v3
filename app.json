@@ -1,30 +1,21 @@
 {
   "expo": {
     "name": "Orryx UI Lab",
-    "slug": "orryx-ui-lab",
+    "slug": "project-obsidian-oryyx",             // ← must match the project that owns your UUID
     "owner": "naktak00",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#000000"
-    },
+    "splash": { "image": "./assets/splash.png", "resizeMode": "contain", "backgroundColor": "#000000" },
     "updates": { "fallbackToCacheTimeout": 0 },
     "assetBundlePatterns": ["**/*"],
     "ios": { "supportsTablet": true },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#000000"
-      }
+      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#000000" }
     },
     "web": { "favicon": "./assets/favicon.png" },
     "extra": {
-      "eas": {
-        "projectId": "7353e96d-8887-4416-a8c1-e4eccb7d82a3"
-      }
+      "eas": { "projectId": "7353e96d-8887-4416-a8c1-e4eccb7d82a3" }
     }
   }
 }
