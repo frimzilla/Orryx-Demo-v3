@@ -22,70 +22,63 @@ jobs:
         run: |
           node -e "const fs=require('fs');try{JSON.parse(fs.readFileSync('package.json','utf8'));console.log('package.json OK ✅')}catch(e){console.error('❌ Invalid package.json:',e.message);process.exit(1)}"
 
-      # ── 20-bar progress install (no tput; TERM-safe) ────────────────────────────
-      - name: Install dependencies (20-bar progress)
+      # ── Accurate 20-bar dependency progress (caps at 99% until success) ───────
+      - name: Install dependencies (20-bar accurate progress)
         shell: bash
         run: |
           set -euo pipefail
 
-          # 1) Estimate work using npm dry-run; fallback to lockfile; final fallback static
           estimate() {
-            # npm ci --dry-run JSON (fast, accurate if lockfile exists)
             local est
             est=$(npm ci --dry-run --json 2>/dev/null | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{try{const j=JSON.parse(s);const a=(j.added||0)+(j.changed||0)+(j.removed||0);console.log(a||0)}catch{console.log(0)}})") || est=0
             if [ "$est" -gt 0 ]; then echo "$est"; return; fi
-
-            # fallback: count dependencies from package-lock.json
             if [ -f package-lock.json ]; then
-              est=$(node -e "try{const j=require('./package-lock.json');const d=j.packages?Object.keys(j.packages).length:(j.dependencies?Object.keys(j.dependencies).length:0);console.log(d||0)}catch{console.log(0)}") || est=0
+              est=$(node -e "try{const j=require('./package-lock.json');const pkgs=j.packages?Object.keys(j.packages).length:0;console.log(pkgs||0)}catch{console.log(0)}") || est=0
               if [ "$est" -gt 0 ]; then echo "$est"; return; fi
             fi
-
-            # last resort
             echo 400
           }
 
-          TOTAL=$(estimate)
-          [ "$TOTAL" -le 0 ] && TOTAL=400
+          TOTAL=$(estimate); [ "$TOTAL" -le 0 ] && TOTAL=400
 
-          # 2) Start the real install quietly in the background
-          ( npm install --silent --no-audit --no-fund ) & pid=$!
+          if [ -f package-lock.json ]; then
+            ( npm ci --silent --no-audit --no-fund ) & pid=$!
+          else
+            ( npm install --silent --no-audit --no-fund ) & pid=$!
+          fi
 
-          # helper: count installed dirs quickly (top-level + scoped children)
-          count_installed() {
-            local top scoped
-            top=$(find node_modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-            scoped=$(find node_modules/@* -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ' || true)
-            echo $(( top + scoped ))
+          MAX=20; LASTPCT=-1
+          draw_bar () {
+            local pct=$1; local filled=$(( pct * MAX / 100 ))
+            (( filled > MAX )) && filled=$MAX
+            local empty=$(( MAX - filled ))
+            printf "["
+            printf "%0.s|" $(seq 1 $filled)
+            printf "%0.s " $(seq 1 $empty)
+            printf "] %3d%%" "$pct"
           }
 
-          MAX=20
-          echo "Installing dependencies…"
+          echo -n "Installing dependencies "
           while kill -0 "$pid" >/dev/null 2>&1; do
-            INST=$(count_installed)
-            [ "$INST" -lt 1 ] && INST=1
-            # scale and clamp to 20
-            FILLED=$(( INST * MAX / TOTAL ))
-            [ "$FILLED" -gt "$MAX" ] && FILLED=$MAX
-            EMPTY=$(( MAX - FILLED ))
-
-            BAR=""
-            for _ in $(seq 1 $FILLED); do BAR="${BAR}|"; done
-            for _ in $(seq 1 $EMPTY);  do BAR="${BAR} "; done
-            PCT=$(( INST * 100 / TOTAL ))
-            [ "$PCT" -gt 100 ] && PCT=100
-            printf "\r[%s] %3d%%" "$BAR" "$PCT"
+            if [ -d node_modules ]; then
+              COUNT=$(find node_modules -type f -name package.json 2>/dev/null | wc -l | tr -d ' ')
+              [ "$COUNT" -lt 1 ] && COUNT=1
+            else
+              COUNT=1
+            fi
+            PCT=$(( COUNT * 100 / TOTAL ))
+            [ "$PCT" -gt 99 ] && PCT=99
+            if [ "$PCT" -ne "$LASTPCT" ]; then
+              printf "\r"; draw_bar "$PCT"; LASTPCT=$PCT
+            fi
             sleep 0.25
           done
 
-          wait "$pid"
-          code=$?
-          printf "\r[%s] 100%%\n" "$(printf '%0.s|' $(seq 1 $MAX))"
-          if [ $code -ne 0 ]; then
-            echo "❌ npm install failed"
-            exit $code
+          if wait "$pid"; then
+            printf "\r"; draw_bar 100; echo -e "\n✅ Dependencies installed"
+          else
+            echo -e "\n❌ npm install failed"; exit 1
           fi
-          echo "✅ Dependencies installed"
 
       - name: Install EAS CLI
         run: npm install -g eas-cli
@@ -130,7 +123,6 @@ jobs:
           fs.writeFileSync('README.txt', url ? `Open this URL for the QR code:\n${url}\n` : 'Build failed or URL not found.\n');
           NODE
 
-      # NOTE: no heredoc inside 'if' — run unconditionally and decide inside bash
       - name: Recover URL from latest finished build (fallback)
         if: always()
         env:
@@ -142,8 +134,7 @@ jobs:
             node <<'NODE'
             const fs = require('fs');
             try {
-              const txt = fs.readFileSync('eas-fallback.json','utf8');
-              const j = JSON.parse(txt);
+              const j = JSON.parse(fs.readFileSync('eas-fallback.json','utf8'));
               const b = Array.isArray(j) ? j[0] : j;
               const url = (b && (b.webUrl || b.buildUrl || b.logsUrl)) || '';
               if (url) {
