@@ -22,31 +22,70 @@ jobs:
         run: |
           node -e "const fs=require('fs');try{JSON.parse(fs.readFileSync('package.json','utf8'));console.log('package.json OK ✅')}catch(e){console.error('❌ Invalid package.json:',e.message);process.exit(1)}"
 
-      # 🔄 QUIET install with an on-screen spinner/loading bar
-      - name: Install dependencies (with loading bar)
+      # ── 20-bar progress install (no tput; TERM-safe) ────────────────────────────
+      - name: Install dependencies (20-bar progress)
         shell: bash
         run: |
           set -euo pipefail
-          # spinner frames
-          frames=( "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏" )
-          i=0
-          tput civis || true
-          printf "Installing dependencies "
+
+          # 1) Estimate work using npm dry-run; fallback to lockfile; final fallback static
+          estimate() {
+            # npm ci --dry-run JSON (fast, accurate if lockfile exists)
+            local est
+            est=$(npm ci --dry-run --json 2>/dev/null | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{try{const j=JSON.parse(s);const a=(j.added||0)+(j.changed||0)+(j.removed||0);console.log(a||0)}catch{console.log(0)}})") || est=0
+            if [ "$est" -gt 0 ]; then echo "$est"; return; fi
+
+            # fallback: count dependencies from package-lock.json
+            if [ -f package-lock.json ]; then
+              est=$(node -e "try{const j=require('./package-lock.json');const d=j.packages?Object.keys(j.packages).length:(j.dependencies?Object.keys(j.dependencies).length:0);console.log(d||0)}catch{console.log(0)}") || est=0
+              if [ "$est" -gt 0 ]; then echo "$est"; return; fi
+            fi
+
+            # last resort
+            echo 400
+          }
+
+          TOTAL=$(estimate)
+          [ "$TOTAL" -le 0 ] && TOTAL=400
+
+          # 2) Start the real install quietly in the background
           ( npm install --silent --no-audit --no-fund ) & pid=$!
-          while kill -0 $pid >/dev/null 2>&1; do
-            printf "\rInstalling dependencies %s" "${frames[$((i%${#frames[@]}))]}"
-            i=$((i+1))
-            sleep 0.1
+
+          # helper: count installed dirs quickly (top-level + scoped children)
+          count_installed() {
+            local top scoped
+            top=$(find node_modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+            scoped=$(find node_modules/@* -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ' || true)
+            echo $(( top + scoped ))
+          }
+
+          MAX=20
+          echo "Installing dependencies…"
+          while kill -0 "$pid" >/dev/null 2>&1; do
+            INST=$(count_installed)
+            [ "$INST" -lt 1 ] && INST=1
+            # scale and clamp to 20
+            FILLED=$(( INST * MAX / TOTAL ))
+            [ "$FILLED" -gt "$MAX" ] && FILLED=$MAX
+            EMPTY=$(( MAX - FILLED ))
+
+            BAR=""
+            for _ in $(seq 1 $FILLED); do BAR="${BAR}|"; done
+            for _ in $(seq 1 $EMPTY);  do BAR="${BAR} "; done
+            PCT=$(( INST * 100 / TOTAL ))
+            [ "$PCT" -gt 100 ] && PCT=100
+            printf "\r[%s] %3d%%" "$BAR" "$PCT"
+            sleep 0.25
           done
-          wait $pid
+
+          wait "$pid"
           code=$?
-          if [ $code -eq 0 ]; then
-            printf "\rInstalling dependencies ✅\n"
-          else
-            printf "\rInstalling dependencies ❌\n"
+          printf "\r[%s] 100%%\n" "$(printf '%0.s|' $(seq 1 $MAX))"
+          if [ $code -ne 0 ]; then
+            echo "❌ npm install failed"
+            exit $code
           fi
-          tput cnorm || true
-          exit $code
+          echo "✅ Dependencies installed"
 
       - name: Install EAS CLI
         run: npm install -g eas-cli
@@ -65,38 +104,33 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           eas --version
-          # Emit JSON we can parse for the URL
           eas build -p android --profile internal --non-interactive --json | tee eas-build.json
 
-      # Parse URL; also emit status/error details if present
       - name: Extract EAS build URL (primary)
         run: |
           node <<'NODE'
           const fs = require('fs');
-          function safeRead(p){ try{ return fs.readFileSync(p,'utf8'); }catch{ return ''; } }
-          let url = '';
-          let status = '';
-          let err = '';
-          const txt = safeRead('eas-build.json').trim();
-          if (txt) {
-            try {
+          let url='', status='', err='';
+          try {
+            const txt = fs.readFileSync('eas-build.json','utf8').trim();
+            if (txt) {
               const j = JSON.parse(txt);
               const b = Array.isArray(j.builds) ? j.builds[0] : j;
               status = b?.status || j?.status || '';
               url = b?.webUrl || b?.buildUrl || b?.logsUrl || '';
               err = b?.error?.message || j?.error?.message || '';
-            } catch (e) {
-              console.error('❌ Parse error:', e.message);
             }
+          } catch(e) {
+            console.error('❌ Parse error:', e.message);
           }
           if (status && status !== 'finished') console.log('EAS status:', status);
           if (!url && err) console.log('EAS error:', err);
           console.log('EAS build page:', url || '(not found)');
-          fs.writeFileSync('eas-build-url.txt', (url || '').trim());
+          fs.writeFileSync('eas-build-url.txt', (url||'').trim());
           fs.writeFileSync('README.txt', url ? `Open this URL for the QR code:\n${url}\n` : 'Build failed or URL not found.\n');
           NODE
 
-      # If URL missing, try to recover from latest finished build list
+      # NOTE: no heredoc inside 'if' — run unconditionally and decide inside bash
       - name: Recover URL from latest finished build (fallback)
         if: always()
         env:
@@ -108,7 +142,8 @@ jobs:
             node <<'NODE'
             const fs = require('fs');
             try {
-              const j = JSON.parse(fs.readFileSync('eas-fallback.json','utf8'));
+              const txt = fs.readFileSync('eas-fallback.json','utf8');
+              const j = JSON.parse(txt);
               const b = Array.isArray(j) ? j[0] : j;
               const url = (b && (b.webUrl || b.buildUrl || b.logsUrl)) || '';
               if (url) {
@@ -118,7 +153,7 @@ jobs:
               } else {
                 console.log('No finished builds found in fallback.');
               }
-            } catch (e) {
+            } catch(e) {
               console.log('Fallback parse error:', e.message);
             }
             NODE
