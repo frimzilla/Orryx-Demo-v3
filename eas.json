@@ -1,9 +1,10 @@
 {
+  "cli": { "appVersionSource": "remote" },
   "build": {
     "development": { "developmentClient": true, "distribution": "internal" },
-    "preview":      { "distribution": "internal" },
-    "production":   { "autoIncrement": true },
-    "internal":     { "distribution": "internal" }   // 👈 added profile
+    "preview": { "distribution": "internal" },
+    "production": { "autoIncrement": true },
+    "internal": { "distribution": "internal" }
   },
   "submit": { "production": {} }
 }
