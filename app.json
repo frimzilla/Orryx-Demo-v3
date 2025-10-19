@@ -2,6 +2,7 @@
   "expo": {
     "name": "Orryx UI Lab",
     "slug": "orryx-ui-lab",
+    "owner": "naktak00",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,12 +11,20 @@
       "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
-    "updates": {
-      "fallbackToCacheTimeout": 0
-    },
+    "updates": { "fallbackToCacheTimeout": 0 },
     "assetBundlePatterns": ["**/*"],
     "ios": { "supportsTablet": true },
-    "android": { "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#000000" } },
-    "web": { "favicon": "./assets/favicon.png" }
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      }
+    },
+    "web": { "favicon": "./assets/favicon.png" },
+    "extra": {
+      "eas": {
+        "projectId": "7353e96d-8887-4416-a8c1-e4eccb7d82a3"
+      }
+    }
   }
 }
